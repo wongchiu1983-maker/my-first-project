@@ -1,117 +1,148 @@
 """
-Round 3 Final Update for 2026 IPOs
-====================================
-Updates the last 6 TODO 2026 stocks (2026/01/02 - 2026/01/12) found via per-stock
-web searches (HKET, 信報, etnet, 格隆匯, Yahoo Finance HK, HSTONG, Eastmoney).
-
-BONUS: Grey market data also collected opportunistically for 4 of them.
+HK IPO Full Analysis Report 更新腳本
+----------------------------------------
+讀取 HK_IPO_Full_Analysis_Report_v2.xlsx 的 "IPO全量數據分析" 工作表，
+根據 Stock Code 精準更新指定欄位的數據，並保留原工作表的格式。
 """
+
+import pandas as pd
 from openpyxl import load_workbook
 
-INPUT  = "HK_IPO_Full_Analysis_Report_v2_ROUND2.xlsx"
-OUTPUT = "HK_IPO_Full_Analysis_Report_v2_FINAL.xlsx"
-SHEET = "IPO全量數據分析"
-PLACEHOLDER = "待公告/需手動核查"
+# ------------------------------------------------------------------
+# 0. 文件路徑與工作表名稱設定
+# ------------------------------------------------------------------
+INPUT_FILE = "HK_IPO_Full_Analysis_Report_v2.xlsx"
+OUTPUT_FILE = "HK_IPO_Full_Analysis_Report_v2.xlsx"  # 原地覆寫；如需另存請修改此路徑
+SHEET_NAME = "IPO全量數據分析"
 
-COL = {
-    "Stock Code":1,
-    "公開零售認購倍數":6, "國際配售認購倍數":7,
-    "暗盤收盤回報率 (%)":11, "首日收市回報率 (%)":12, "一手中簽率 (%)":14,
-}
+# ------------------------------------------------------------------
+# 1. 欄位名稱 → 欄位索引（1-based，對應 openpyxl）
+#    依據用戶提供的嚴格欄位順序
+# ------------------------------------------------------------------
+COLUMNS = [
+    "Stock Code",                        # A  (1)
+    "Company Name",                      # B  (2)
+    "Date of Prospectus",                # C  (3)
+    "Date of Listing",                   # D  (4)
+    "IPO Subscription Price",            # E  (5)
+    "公開零售認購倍數",                   # F  (6)
+    "國際配售認購倍數",                   # G  (7)
+    "國際配售認購人數",                   # H  (8)
+    "基石投資者占比 (%)",                 # I  (9)
+    "公司大股東持股占比 (上市後 %)",        # J  (10)
+    "暗盤收盤回報率 (%)",                 # K  (11)
+    "首日收市回報率 (%)",                 # L  (12)
+    "一個月回報率 (%)",                   # M  (13)
+    "一手中簽率 (%)",                     # N  (14)
+]
+COL_IDX = {name: i + 1 for i, name in enumerate(COLUMNS)}  # 1-based
 
-# Data per stock code. None = leave as 待公告, skip.
-# Sources cited in the comment next to each value.
-DATA = {
-    "06082": {  # 壁仞科技 2026/01/02
-        "公開零售認購倍數":   "2347.53倍",    # 格隆匯: 公開發售2347.53倍
-        "一手中簽率 (%)":     "5.0%",          # HKET: 一手中籤率5%
-        "暗盤收盤回報率 (%)": "+79.69%",       # 格隆匯: 暗盤收升79.69%
-        "首日收市回報率 (%)": "+75.82%",       # 格隆匯: 首日收盤較發行價大升75.82%
+# ------------------------------------------------------------------
+# 2. 更新資料定義（以 Stock Code 為鍵）
+#    僅填入已確認的真實數據；未列出的欄位保持原值「待公告/需手動核查」
+# ------------------------------------------------------------------
+UPDATES = {
+    "06681": {  # BrainAurora Medical Technology Limited - B
+        "公開零售認購倍數": "11.39倍",
+        "國際配售認購倍數": "接近1倍",
+        "首日收市回報率 (%)": "+3% ~ +5%(約)",
+        "一手中簽率 (%)": "約50.01%",
     },
-    "02513": {  # 智譜 2026/01/08
-        "公開零售認購倍數":   "1158.46倍",    # 信報: 公開發售1158.46倍
-        "一手中簽率 (%)":     "5.0%",          # 信報: 中籤率5%
-        "首日收市回報率 (%)": "+13.17%",       # 東方財富: 131.50/116.20-1 = +13.17%
+    "00100": {  # MiniMax Group Inc. - W - P
+        "公開零售認購倍數": "1837.17倍",
+        "國際配售認購倍數": "36.76倍",
+        "國際配售認購人數": "482",
+        "基石投資者占比 (%)": "56.53%",
+        "公司大股東持股占比 (上市後 %)": "89.30%",
+        "暗盤收盤回報率 (%)": "+26.80%",
+        "首日收市回報率 (%)": "+109.09%",
+        "一個月回報率 (%)": "+185.50%",
+        "一手中簽率 (%)": "2.81%",
     },
-    "09903": {  # 天數智芯 2026/01/08
-        "公開零售認購倍數":   "413.24倍",     # 信報: 公開發售413.24倍
-        "一手中簽率 (%)":     "7.0%",          # 信報: 中籤率7%
-        "首日收市回報率 (%)": "+8.44%",        # 阿思達克: 156.8/144.6-1 = +8.44%
-    },
-    "02675": {  # 精鋒醫療-B 2026/01/08
-        "公開零售認購倍數":   "1091.94倍",    # 東方財富: 公配1091.94倍
-        "一手中簽率 (%)":     "0.5%",          # 信報: 中籤率0.5%
-        "暗盤收盤回報率 (%)": "+37.84%",       # 東方財富(輝立): 59.60 vs 43.24
-        "首日收市回報率 (%)": "+30.90%",       # 東方財富: 56.60/43.24-1
-    },
-    "06938": {  # 瑞博生物-B 2026/01/09
-        # 公開認購最終倍數未查到明確最終數字,略過
-        "首日收市回報率 (%)": "+41.63%",       # etnet+HSTONG: 82.10/57.97-1
-    },
-    "00501": {  # 豪威集團 2026/01/12
-        "公開零售認購倍數":   "9.28倍",       # 匯港通訊: 公開發售8.28倍; 阿思達克 9.28倍(差異,取後者)
-        "國際配售認購倍數":   "9.73倍",       # 阿思達克: 國際發售9.73倍(額外補欄位7)
-        "一手中簽率 (%)":     "100.0%",        # 匯港/阿思達克: 一手中籤率100%
-        "暗盤收盤回報率 (%)": "-0.30%",         # 阿思達克(富途): 104.5/104.8-1
-        # 首日收市百分比未查到明確數字,略過
+    "02560": {  # Anhui Conch Material Technology Co., Ltd. - H shares
+        "公開零售認購倍數": "相對溫和",
+        "首日收市回報率 (%)": "約-47%",
     },
 }
 
 
 def main():
-    wb = load_workbook(INPUT)
-    ws = wb[SHEET]
-    code_to_row = {str(ws.cell(row=r, column=1).value).strip(): r
-                   for r in range(2, ws.max_row+1) if ws.cell(row=r, column=1).value}
+    # --------------------------------------------------------------
+    # 3. 讀取 Excel（使用 openpyxl 以保留格式）
+    # --------------------------------------------------------------
+    print(f"[1/4] 讀取文件: {INPUT_FILE}")
+    wb = load_workbook(INPUT_FILE)
+    if SHEET_NAME not in wb.sheetnames:
+        raise ValueError(
+            f"找不到工作表 '{SHEET_NAME}'，可用工作表為: {wb.sheetnames}"
+        )
+    ws = wb[SHEET_NAME]
+    print(f"      工作表尺寸: {ws.max_row} 行 x {ws.max_column} 欄")
 
-    cells_changed = 0
-    touched_codes = []
-    log = []
-    for code, fields in DATA.items():
-        if code not in code_to_row:
-            log.append(f"✗ {code} not in user file"); continue
-        row = code_to_row[code]
-        changed_this = 0
-        for field, new_v in fields.items():
-            col = COL[field]
-            old_v = ws.cell(row=row, column=col).value
-            if old_v != PLACEHOLDER:
-                continue
-            ws.cell(row=row, column=col).value = new_v
-            cells_changed += 1
-            changed_this += 1
-        if changed_this:
-            touched_codes.append(code)
-            log.append(f"✓ {code}: {changed_this} cells updated")
+    # --------------------------------------------------------------
+    # 4. 驗證標題欄（確保欄位順序與預期一致）
+    # --------------------------------------------------------------
+    print("[2/4] 驗證欄位標題")
+    actual_headers = [ws.cell(row=1, column=i + 1).value for i in range(len(COLUMNS))]
+    for expected, actual in zip(COLUMNS, actual_headers):
+        if expected != actual:
+            raise ValueError(
+                f"欄位標題不符: 預期 '{expected}' / 實際 '{actual}'"
+            )
+    print("      欄位標題與預期完全一致 ✓")
 
-    wb.save(OUTPUT)
-    print("\n".join(log))
-    print(f"\nTotal cells updated this round: {cells_changed}")
-    print(f"Stocks touched: {len(touched_codes)}")
+    # --------------------------------------------------------------
+    # 5. 建立 Stock Code → 行號索引
+    # --------------------------------------------------------------
+    stock_code_col = COL_IDX["Stock Code"]
+    code_to_row = {}
+    for r in range(2, ws.max_row + 1):
+        code_val = ws.cell(row=r, column=stock_code_col).value
+        if code_val is not None:
+            code_to_row[str(code_val).strip()] = r
 
-    # Final coverage analysis
-    print("\n" + "=" * 60)
-    print("FINAL COVERAGE REPORT")
-    print("=" * 60)
-    stats = {
-        "公開零售認購倍數": 0, "國際配售認購倍數": 0, "國際配售認購人數": 0,
-        "基石投資者占比 (%)": 0, "公司大股東持股占比 (上市後 %)": 0,
-        "暗盤收盤回報率 (%)": 0, "首日收市回報率 (%)": 0,
-        "一個月回報率 (%)": 0, "一手中簽率 (%)": 0,
-    }
-    col_map = {"公開零售認購倍數":6, "國際配售認購倍數":7, "國際配售認購人數":8,
-               "基石投資者占比 (%)":9, "公司大股東持股占比 (上市後 %)":10,
-               "暗盤收盤回報率 (%)":11, "首日收市回報率 (%)":12,
-               "一個月回報率 (%)":13, "一手中簽率 (%)":14}
-    total = ws.max_row - 1
-    for r in range(2, ws.max_row+1):
-        for field, col in col_map.items():
-            if ws.cell(row=r, column=col).value != PLACEHOLDER:
-                stats[field] += 1
-    print(f"\n{'Field':<35}{'Filled':<10}{'Coverage'}")
-    print("-"*60)
-    for f, c in stats.items():
-        print(f"{f:<35}{c}/{total:<8}{100*c/total:.1f}%")
+    # --------------------------------------------------------------
+    # 6. 根據 UPDATES 定義，精準寫入指定儲存格
+    # --------------------------------------------------------------
+    print("[3/4] 更新資料")
+    total_cells_updated = 0
+    for stock_code, fields in UPDATES.items():
+        if stock_code not in code_to_row:
+            print(f"      ⚠ 找不到 Stock Code: {stock_code}，跳過")
+            continue
+        row = code_to_row[stock_code]
+        company_name = ws.cell(row=row, column=COL_IDX["Company Name"]).value
+        company_short = (company_name or "").replace("\n", " ").strip()[:45]
+        print(f"      • {stock_code} (Row {row}) - {company_short}")
+        for field, new_value in fields.items():
+            col = COL_IDX[field]
+            old_value = ws.cell(row=row, column=col).value
+            ws.cell(row=row, column=col).value = new_value
+            total_cells_updated += 1
+            print(f"          [{field}] '{old_value}' → '{new_value}'")
+    print(f"      共更新 {total_cells_updated} 個儲存格")
+
+    # --------------------------------------------------------------
+    # 7. 儲存
+    # --------------------------------------------------------------
+    print(f"[4/4] 儲存至: {OUTPUT_FILE}")
+    wb.save(OUTPUT_FILE)
+    print("      儲存完成 ✓")
+
+    # --------------------------------------------------------------
+    # 8. 使用 pandas 驗證結果
+    # --------------------------------------------------------------
+    print("\n=== 驗證更新後的資料 (使用 pandas 讀取) ===")
+    df = pd.read_excel(OUTPUT_FILE, sheet_name=SHEET_NAME, dtype=str)
+    for stock_code in UPDATES:
+        row_df = df[df["Stock Code"] == stock_code]
+        if row_df.empty:
+            print(f"  ⚠ 驗證時找不到 {stock_code}")
+            continue
+        print(f"\n  [{stock_code}] {row_df.iloc[0]['Company Name'].strip()}")
+        for field in UPDATES[stock_code]:
+            print(f"      {field}: {row_df.iloc[0][field]}")
+
 
 if __name__ == "__main__":
     main()
